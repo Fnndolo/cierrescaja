@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# Test artifacts del excelFiller
+backend/templates/_test_*.xlsx
+
+# Sistema
+Thumbs.db
+*.swp

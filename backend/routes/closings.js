@@ -1,0 +1,184 @@
+import express from 'express';
+import { query } from '../db.js';
+import { SEDES } from '../config.js';
+import { ensureClosingFolder, uploadFile } from '../services/googleDrive.js';
+import { fillArqueo } from '../services/excelFiller.js';
+
+const router = express.Router();
+
+function isValidDate(s) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+// Suma billetes y monedas de un conteo => total efectivo arqueado.
+function totalArqueoFromConteo(conteo) {
+  if (!conteo || typeof conteo !== 'object') return 0;
+  let total = 0;
+  for (const group of ['billetes', 'monedas']) {
+    const g = conteo[group] || {};
+    for (const [denom, cant] of Object.entries(g)) {
+      total += (Number(cant) || 0) * (Number(denom) || 0);
+    }
+  }
+  return total;
+}
+
+// Busca el cierre finalizado mas reciente de la misma sede ANTES de la fecha dada,
+// y devuelve su total de arqueo (cash que quedo en caja al final de ese dia).
+async function findPreviousArqueo(sede, fecha) {
+  const r = await query(
+    `SELECT fecha, conteo FROM closings
+     WHERE sede = $1 AND fecha < $2 AND estado = 'finalizado'
+     ORDER BY fecha DESC LIMIT 1`,
+    [sede, fecha]
+  );
+  if (!r.rows[0]) return null;
+  return {
+    fecha: r.rows[0].fecha,
+    total: totalArqueoFromConteo(r.rows[0].conteo),
+  };
+}
+
+// GET /api/closings?sede=&from=&to=
+router.get('/', async (req, res, next) => {
+  try {
+    const { sede, from, to } = req.query;
+    const params = [];
+    const where = [];
+    if (sede) { params.push(sede); where.push(`sede = $${params.length}`); }
+    if (from) { params.push(from); where.push(`fecha >= $${params.length}`); }
+    if (to)   { params.push(to);   where.push(`fecha <= $${params.length}`); }
+    const sql = `SELECT id, sede, fecha, hora, responsable, estado, drive_excel_id, finalized_at, created_at
+                 FROM closings
+                 ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+                 ORDER BY fecha DESC, sede ASC LIMIT 200`;
+    const r = await query(sql, params);
+    res.json({ items: r.rows });
+  } catch (err) { next(err); }
+});
+
+// POST /api/closings  body: { sede, fecha }
+// idempotente: si ya existe (sede, fecha), retorna el existente.
+router.post('/', async (req, res, next) => {
+  try {
+    const { sede, fecha } = req.body || {};
+    if (!sede || !SEDES.includes(sede)) {
+      return res.status(400).json({ error: 'sede invalida' });
+    }
+    if (!isValidDate(fecha)) {
+      return res.status(400).json({ error: 'fecha invalida (YYYY-MM-DD)' });
+    }
+    const insert = `INSERT INTO closings (sede, fecha)
+                    VALUES ($1, $2)
+                    ON CONFLICT (sede, fecha) DO UPDATE SET updated_at = NOW()
+                    RETURNING *`;
+    const r = await query(insert, [sede, fecha]);
+    const closing = r.rows[0];
+
+    // Si el cierre acaba de crearse (esta vacio) buscamos el arqueo de ayer para sugerir saldo anterior.
+    const isFresh = Number(closing.saldo_anterior) === 0
+                  && Object.keys(closing.entradas || {}).length === 0
+                  && Object.keys(closing.conteo || {}).length === 0;
+    let saldo_anterior_sugerido = null;
+    if (isFresh) {
+      const prev = await findPreviousArqueo(sede, fecha);
+      if (prev) saldo_anterior_sugerido = { fuente: 'db', fecha: prev.fecha, total: prev.total };
+    }
+
+    res.status(201).json({ ...closing, saldo_anterior_sugerido });
+  } catch (err) { next(err); }
+});
+
+// GET /api/closings/:id
+router.get('/:id', async (req, res, next) => {
+  try {
+    const r = await query('SELECT * FROM closings WHERE id = $1', [req.params.id]);
+    if (!r.rows[0]) return res.status(404).json({ error: 'no encontrado' });
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// GET /api/closings/by/:sede/:fecha
+router.get('/by/:sede/:fecha', async (req, res, next) => {
+  try {
+    const r = await query('SELECT * FROM closings WHERE sede = $1 AND fecha = $2', [req.params.sede, req.params.fecha]);
+    if (!r.rows[0]) return res.json(null);
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// PATCH /api/closings/:id  body: campos a actualizar
+const ALLOWED_FIELDS = ['hora', 'responsable', 'saldo_anterior', 'entradas', 'gastos', 'conteo'];
+router.patch('/:id', async (req, res, next) => {
+  try {
+    const fields = [];
+    const params = [];
+    for (const k of ALLOWED_FIELDS) {
+      if (req.body[k] !== undefined) {
+        params.push(['entradas', 'gastos', 'conteo'].includes(k) ? JSON.stringify(req.body[k]) : req.body[k]);
+        fields.push(`${k} = $${params.length}`);
+      }
+    }
+    if (!fields.length) return res.status(400).json({ error: 'sin campos' });
+    fields.push(`updated_at = NOW()`);
+    params.push(req.params.id);
+    const sql = `UPDATE closings SET ${fields.join(', ')} WHERE id = $${params.length} AND estado = 'borrador' RETURNING *`;
+    const r = await query(sql, params);
+    if (!r.rows[0]) return res.status(400).json({ error: 'cierre finalizado o inexistente' });
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// POST /api/closings/:id/finalize
+router.post('/:id/finalize', async (req, res, next) => {
+  try {
+    const r = await query('SELECT * FROM closings WHERE id = $1', [req.params.id]);
+    const closing = r.rows[0];
+    if (!closing) return res.status(404).json({ error: 'no encontrado' });
+    if (closing.estado === 'finalizado') {
+      return res.status(400).json({ error: 'ya esta finalizado' });
+    }
+
+    const fechaStr = closing.fecha?.toISOString
+      ? closing.fecha.toISOString().slice(0, 10)
+      : String(closing.fecha).slice(0, 10);
+    const folderId = await ensureClosingFolder({ sede: closing.sede, date: fechaStr, kind: 'cierre' });
+    const buffer = await fillArqueo({
+      ...closing,
+      fecha: fechaStr,
+    });
+    const safeSede = closing.sede.replace(/[^\w\s-]/g, '').trim();
+    const uploaded = await uploadFile({
+      folderId,
+      name: `arqueo-${safeSede}-${fechaStr}.xlsx`,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      buffer: Buffer.from(buffer),
+    });
+
+    const upd = await query(
+      `UPDATE closings SET estado = 'finalizado', finalized_at = NOW(),
+              drive_folder_id = $1, drive_excel_id = $2, updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [folderId, uploaded.id, req.params.id]
+    );
+    res.json({
+      closing: upd.rows[0],
+      drive: { folderId, excel: uploaded },
+    });
+  } catch (err) { next(err); }
+});
+
+// POST /api/closings/:id/reopen   (utilidad para corregir antes de Drive)
+router.post('/:id/reopen', async (req, res, next) => {
+  try {
+    const r = await query(
+      `UPDATE closings SET estado = 'borrador', finalized_at = NULL, updated_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rows[0]) return res.status(404).json({ error: 'no encontrado' });
+    res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
+export default router;
