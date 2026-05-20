@@ -10,6 +10,18 @@ function isValidDate(s) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
+// Hora actual en zona horaria de Colombia (HH:MM:SS), independientemente del TZ del servidor.
+function currentColombiaTime() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Bogota',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t)?.value || '00';
+  // Intl puede devolver "24" para medianoche en algunos motores
+  const hh = get('hour') === '24' ? '00' : get('hour');
+  return `${hh}:${get('minute')}:${get('second')}`;
+}
+
 // Suma billetes y monedas de un conteo => total efectivo arqueado.
 function totalArqueoFromConteo(conteo) {
   if (!conteo || typeof conteo !== 'object') return 0;
@@ -137,6 +149,13 @@ router.post('/:id/finalize', async (req, res, next) => {
     if (!closing) return res.status(404).json({ error: 'no encontrado' });
     if (closing.estado === 'finalizado') {
       return res.status(400).json({ error: 'ya esta finalizado' });
+    }
+
+    // Si el usuario no ingreso hora manualmente, registramos la hora actual del cierre
+    if (!closing.hora) {
+      const horaAuto = currentColombiaTime();
+      await query('UPDATE closings SET hora = $1 WHERE id = $2', [horaAuto, closing.id]);
+      closing.hora = horaAuto;
     }
 
     const fechaStr = closing.fecha?.toISOString

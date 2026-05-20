@@ -9,7 +9,7 @@ import Section from './Section';
 import { api } from '../lib/api';
 import { useAutoSave } from '../hooks/useAutoSave';
 import { BILLETES, MONEDAS, ENTRADAS_KEYS, type Closing, type ClosingPhoto, type Conteo, type Gasto } from '../lib/types';
-import { formatCOP, nowHHMM, sumObjectValues } from '../lib/format';
+import { formatCOP, sumObjectValues } from '../lib/format';
 
 function sumConteo(conteo: Conteo | undefined): number {
   if (!conteo) return 0;
@@ -73,7 +73,7 @@ export default function ClosingForm({ sede, fecha, onBack }: Props) {
   // cargar valores del cierre traido
   useEffect(() => {
     if (!closing) return;
-    setHora(closing.hora?.toString().slice(0, 5) || nowHHMM());
+    setHora(closing.hora?.toString().slice(0, 5) || '');
     setResponsable(closing.responsable || '');
     setSaldoAnterior(Number(closing.saldo_anterior) || 0);
     setEntradas(closing.entradas || {});
@@ -313,7 +313,9 @@ export default function ClosingForm({ sede, fecha, onBack }: Props) {
       <Section title="Datos básicos" defaultOpen>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs text-slate-600">Hora</label>
+            <label className="block text-xs text-slate-600">
+              Hora {!hora && !isFinalized && <span className="text-slate-400">(se registra al finalizar)</span>}
+            </label>
             <input type="time" value={hora} disabled={isFinalized}
               onChange={(e) => setHora(e.target.value)}
               className="w-full rounded border border-slate-300 px-2 py-1 text-sm" />

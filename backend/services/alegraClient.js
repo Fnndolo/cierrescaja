@@ -51,6 +51,10 @@ function isAperturaDeTurno(payment) {
   return /apertura\s*de\s*turno/i.test(String(payment.anotation || payment.observations || ''));
 }
 
+function isCierreDeTurno(payment) {
+  return /cierre\s*de\s*turno/i.test(String(payment.anotation || payment.observations || ''));
+}
+
 function hasInvoiceLink(payment) {
   return Array.isArray(payment.invoices) && payment.invoices.length > 0;
 }
@@ -253,12 +257,13 @@ export async function dailySummary({ date, sede }) {
 
   // Egresos del dia que cuentan como "gastos por comprobantes de pago" del cierre:
   // 1) son del banco POS de la sede (es decir, salieron de la caja de efectivo)
-  // 2) no son la "Apertura de turno" del sistema (ese egreso es la contra-partida de la apertura)
+  // 2) no son entradas del sistema de turno: "Apertura de turno" (contra-partida del
+  //    ingreso de apertura) ni "Cierre de turno" (retiro automatico al cerrar)
   const gastos = [];
   let totalEgresos = 0;
   for (const p of outs) {
     totalEgresos += Number(p.amount) || 0;
-    if (isAperturaDeTurno(p)) continue;
+    if (isAperturaDeTurno(p) || isCierreDeTurno(p)) continue;
     if (posBankId && String(p.bankAccount?.id) !== posBankId) continue;
     gastos.push(paymentToGasto(p));
   }

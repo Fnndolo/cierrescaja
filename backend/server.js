@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { runMigrations, pool, startPoolKeepAlive } from './db.js';
+import { runMigrations, waitForDb, pool, startPoolKeepAlive } from './db.js';
 import { SEDES } from './config.js';
 import { startAlegraPrefetcher, warmupTodayForSedes } from './services/alegraClient.js';
 import closingsRouter from './routes/closings.js';
@@ -54,22 +54,28 @@ app.use((err, _req, res, _next) => {
 async function start() {
   try {
     if (process.env.DATABASE_URL) {
+      await waitForDb();              // reintenta hasta que la DB responda
       await runMigrations();
       console.log('[db] migraciones aplicadas');
-      // Warm-up: establece una conexion del pool antes de aceptar requests
-      await pool.query('SELECT 1');
-      console.log('[db] pool caliente');
       startPoolKeepAlive();
     } else {
       console.warn('[db] DATABASE_URL no configurada, saltando migraciones');
     }
-    app.listen(PORT, () => {
-      console.log(`[backend] escuchando en puerto ${PORT}`);
-      // Precargar Alegra para hoy en todas las sedes (no bloquea el arranque)
+    // Bind explicito a 0.0.0.0 para que el healthcheck de Railway (IPv4) alcance el server.
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`[backend] escuchando en 0.0.0.0:${PORT} (PORT env = ${process.env.PORT || 'no definido'})`);
       warmupTodayForSedes(SEDES);
-      // Mantener cache fresca refrescando en background lo accedido recientemente
       startAlegraPrefetcher();
     });
+
+    // Apagado limpio ante SIGTERM (redeploys de Railway) / SIGINT (Ctrl+C local).
+    const shutdown = (signal) => {
+      console.log(`[backend] recibido ${signal}, cerrando...`);
+      server.close(() => { pool.end().finally(() => process.exit(0)); });
+      setTimeout(() => process.exit(0), 10_000).unref?.();
+    };
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   } catch (err) {
     console.error('[backend] fallo al iniciar:', err);
     process.exit(1);
