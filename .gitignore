@@ -14,3 +14,8 @@ backend/templates/_test_*.xlsx
 # Sistema
 Thumbs.db
 *.swp
+
+# Archivos de muestra que no se versionan
+Alegra - Transacciones*.xlsx
+*.tmp.xlsx
+_test_*.xlsx

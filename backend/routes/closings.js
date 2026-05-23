@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { SEDES } from '../config.js';
 import { ensureClosingFolder, uploadFile } from '../services/googleDrive.js';
 import { fillArqueo } from '../services/excelFiller.js';
+import { buildTransactionsReport } from '../services/transactionsReport.js';
 import { emitClosingChange } from '../services/eventBus.js';
 
 const router = express.Router();
@@ -183,6 +184,23 @@ router.post('/:id/finalize', async (req, res, next) => {
       buffer: Buffer.from(buffer),
     });
 
+    // Reporte de transacciones de Alegra (replica el export oficial).
+    // Si falla, no rompe la finalizacion del arqueo.
+    let transUploaded = null;
+    let transError = null;
+    try {
+      const report = await buildTransactionsReport({ sede: closing.sede, date: fechaStr });
+      transUploaded = await uploadFile({
+        folderId,
+        name: report.filename,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        buffer: report.buffer,
+      });
+    } catch (e) {
+      transError = e.message || String(e);
+      console.warn('[finalize] reporte transacciones fallo:', transError);
+    }
+
     const upd = await query(
       `UPDATE closings SET estado = 'finalizado', finalized_at = NOW(),
               drive_folder_id = $1, drive_excel_id = $2, updated_at = NOW()
@@ -192,7 +210,8 @@ router.post('/:id/finalize', async (req, res, next) => {
     emitClosingChange(req.params.id, 'finalize');
     res.json({
       closing: upd.rows[0],
-      drive: { folderId, excel: uploaded },
+      drive: { folderId, excel: uploaded, transacciones: transUploaded },
+      transactionsReportError: transError,
     });
   } catch (err) { next(err); }
 });

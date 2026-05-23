@@ -208,6 +208,29 @@ export async function getPayments({ date, sede, type = 'in' }) {
   return r.data;
 }
 
+// Cache simple del nombre de empresa por sede (no cambia en runtime)
+const companyNameCache = new Map();
+export async function getCompanyName(sede) {
+  if (companyNameCache.has(sede)) return companyNameCache.get(sede);
+  const c = clientFor(sede);
+  try {
+    const res = await c.get('/company');
+    const name = res.data?.name || sede;
+    companyNameCache.set(sede, name);
+    return name;
+  } catch (e) {
+    companyNameCache.set(sede, sede); // fallback al nombre de la sede
+    return sede;
+  }
+}
+
+// Trae los egresos del dia con TODOS los campos necesarios para el reporte de transacciones
+// (mas detallado que paymentToGasto). Usa cache via fetchWithCache.
+export async function getEgresosDelDia({ date, sede, force = false }) {
+  const r = await fetchPayments({ sede, date, type: 'out', force });
+  return r.data;
+}
+
 // Convierte un payment de Alegra en un row de "Gastos por comprobantes de pago".
 function paymentToGasto(p) {
   const concepto = p.observations

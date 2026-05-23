@@ -41,7 +41,15 @@ export const api = {
     }),
 
   finalizeClosing: (id: number) =>
-    jsonFetch<{ closing: Closing; drive: { folderId: string; excel: { id: string; webViewLink?: string } } }>(
+    jsonFetch<{
+      closing: Closing;
+      drive: {
+        folderId: string;
+        excel: { id: string; webViewLink?: string };
+        transacciones?: { id: string; name?: string; webViewLink?: string } | null;
+      };
+      transactionsReportError?: string | null;
+    }>(
       `/api/closings/${id}/finalize`,
       { method: 'POST' }
     ),
