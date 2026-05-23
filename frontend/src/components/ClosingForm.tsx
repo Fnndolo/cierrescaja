@@ -205,17 +205,17 @@ export default function ClosingForm({ sede, fecha, onBack }: Props) {
     setAutofilling(true);
     setPrefillStatus('loading');
     setPrefillError(null);
-    setPrefillInfo('Consultando Alegra (forzando datos frescos)…');
     try {
-      // force=true -> bypassa la cache, trae datos frescos al primer click
-      const data = await api.getAlegraPrefill(sede, fecha, { force: true });
+      // Sin force: lee cache (instantaneo). El prefetcher del backend la mantiene fresca cada ~30s.
+      const data = await api.getAlegraPrefill(sede, fecha);
       if (data.saldo_anterior_sugerido > 0 && saldoAnterior === 0) {
         setSaldoAnterior(data.saldo_anterior_sugerido);
       }
       setEntradas((prev) => ({ ...prev, ...data.entradas }));
       setGastos((prev) => mergeGastos(prev, data.gastos || []));
+      const ageSec = data.fetchedAt ? Math.max(0, Math.round((Date.now() - data.fetchedAt) / 1000)) : null;
       setPrefillStatus('done');
-      setPrefillInfo('Datos actualizados desde Alegra');
+      setPrefillInfo(ageSec != null ? `Datos de hace ${ageSec}s (cache backend)` : 'Datos aplicados');
     } catch (e: any) {
       setPrefillStatus('error');
       setPrefillError(e.message);

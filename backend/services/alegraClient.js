@@ -3,10 +3,10 @@ import { alegraCredentialsForSede } from '../config.js';
 
 const BASE_URL = 'https://api.alegra.com/api/v1';
 const REQUEST_TIMEOUT = 90_000;        // Alegra puede tardar 15-20s por pagina
-const STALE_AFTER_MS = 30 * 1000;      // 30s: tras esto la cache se considera "stale" y se refresca en background
+const STALE_AFTER_MS = 8 * 1000;       // 8s: tras esto la cache se considera "stale" y se refresca en background
 const HARD_CACHE_MS  = 30 * 60 * 1000; // 30min: tope absoluto (entrada muy vieja se reemplaza sincronicamente)
 const RECENT_KEY_TTL_MS = 60 * 60 * 1000; // 1h: el prefetcher solo refresca keys usadas en la ultima hora
-const PREFETCH_INTERVAL_MS = 20 * 1000;   // cada 20s revisamos que refrescar
+const PREFETCH_INTERVAL_MS = 5 * 1000;    // cada 5s revisamos que refrescar (limitado por refreshing flag)
 
 // cache[key] = { fetchedAt: number, data: any, refreshing: boolean }
 const cache = new Map();
@@ -123,6 +123,7 @@ function classifyAccount(bankAccount) {
 // Stale-while-revalidate: si hay cache, retorna instantaneo. Si esta stale, dispara
 // un refresh en background (no bloquea). Si no hay cache, fetch sincrono.
 // Con force=true, bypassa la cache: fetch sincrono SIEMPRE (para el boton manual de refrescar).
+// Retorna { data, fetchedAt } para que el caller pueda mostrar la edad del dato.
 async function fetchWithCache(cacheKey, fetcher, { force = false } = {}) {
   recentKeys.set(cacheKey, { lastAccess: Date.now(), fetcher });
   if (!force) {
@@ -130,7 +131,7 @@ async function fetchWithCache(cacheKey, fetcher, { force = false } = {}) {
     const now = Date.now();
     if (hit) {
       const age = now - hit.fetchedAt;
-      if (age < STALE_AFTER_MS) return hit.data; // fresco
+      if (age < STALE_AFTER_MS) return { data: hit.data, fetchedAt: hit.fetchedAt }; // fresco
       if (age < HARD_CACHE_MS) {
         // stale - retorna cached y refresca atras
         if (!hit.refreshing) {
@@ -139,28 +140,31 @@ async function fetchWithCache(cacheKey, fetcher, { force = false } = {}) {
             cache.set(cacheKey, { fetchedAt: Date.now(), data, refreshing: false });
           }).catch(() => { hit.refreshing = false; });
         }
-        return hit.data;
+        return { data: hit.data, fetchedAt: hit.fetchedAt };
       }
     }
   }
   // No cache, demasiado vieja, o force=true - fetch sincrono
   const data = await fetcher();
-  cache.set(cacheKey, { fetchedAt: Date.now(), data, refreshing: false });
-  return data;
+  const fetchedAt = Date.now();
+  cache.set(cacheKey, { fetchedAt, data, refreshing: false });
+  return { data, fetchedAt };
 }
 
 async function fetchPayments({ sede, date, type, force }) {
-  return fetchWithCache(`pay|${sede}|${date}|${type}`, async () => {
+  const r = await fetchWithCache(`pay|${sede}|${date}|${type}`, async () => {
     const c = clientFor(sede);
     return paginate(c, '/payments', { date, type });
   }, { force });
+  return r; // { data, fetchedAt }
 }
 
 async function fetchInvoices({ sede, date, force }) {
-  return fetchWithCache(`inv|${sede}|${date}`, async () => {
+  const r = await fetchWithCache(`inv|${sede}|${date}`, async () => {
     const c = clientFor(sede);
     return paginate(c, '/invoices', { date });
   }, { force });
+  return r;
 }
 
 // Loop que refresca en background las entradas accedidas recientemente.
@@ -200,7 +204,8 @@ export function warmupTodayForSedes(sedes) {
 }
 
 export async function getPayments({ date, sede, type = 'in' }) {
-  return fetchPayments({ sede, date, type });
+  const r = await fetchPayments({ sede, date, type });
+  return r.data;
 }
 
 // Convierte un payment de Alegra en un row de "Gastos por comprobantes de pago".
@@ -221,10 +226,14 @@ function paymentToGasto(p) {
 }
 
 export async function dailySummary({ date, sede, force = false }) {
-  const [ins, outs] = await Promise.all([
+  const [insR, outsR] = await Promise.all([
     fetchPayments({ sede, date, type: 'in', force }),
     fetchPayments({ sede, date, type: 'out', force }),
   ]);
+  const ins = insR.data;
+  const outs = outsR.data;
+  // El dato es tan viejo como el mas antiguo de los dos fetches
+  const fetchedAt = Math.min(insR.fetchedAt, outsR.fetchedAt);
 
   // Identificamos la cuenta del POS de la sede a partir de la apertura de turno.
   const posBankId = findPosBankId(ins);
@@ -276,6 +285,7 @@ export async function dailySummary({ date, sede, force = false }) {
   return {
     date,
     sede,
+    fetchedAt,  // timestamp ms cuando se trajo de Alegra (para mostrar "hace Xs")
     posBankId,
     posBankName: posBankId ? (ins.find(p => String(p.bankAccount?.id) === posBankId)?.bankAccount?.name || null) : null,
     aperturaDeTurno,
@@ -298,6 +308,7 @@ export async function prefillFromAlegra({ date, sede, force = false }) {
   const s = await dailySummary({ date, sede, force });
   return {
     saldo_anterior_sugerido: s.aperturaDeTurno,
+    fetchedAt: s.fetchedAt,
     entradas: {
       venta_factura_pos: s.ventaFacturaPos,
       otros_ingresos: s.otrosIngresos,

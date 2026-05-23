@@ -55,6 +55,7 @@ export const api = {
   getAlegraPrefill: (sede: string, date: string, opts?: { force?: boolean }) =>
     jsonFetch<{
       saldo_anterior_sugerido: number;
+      fetchedAt: number; // timestamp ms cuando Alegra respondio
       entradas: Record<string, number>;
       gastos: Array<{ fecha: string; cp_no: string; tercero: string; concepto: string; valor: number; alegra_payment_id: string }>;
       raw: AlegraSummary & { aperturaDeTurno?: number; ventaFacturaPos?: number; otrosIngresos?: number; posBankId?: string; posBankName?: string };
