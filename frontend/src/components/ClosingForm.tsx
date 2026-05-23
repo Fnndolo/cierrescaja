@@ -173,7 +173,7 @@ export default function ClosingForm({ sede, fecha, onBack }: Props) {
         })
         .catch(() => { /* silencioso */ });
     };
-    const interval = window.setInterval(tick, 60_000);
+    const interval = window.setInterval(tick, 30_000);
     return () => { cancelled = true; window.clearInterval(interval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [closing?.id, sede, fecha]);
@@ -205,8 +205,10 @@ export default function ClosingForm({ sede, fecha, onBack }: Props) {
     setAutofilling(true);
     setPrefillStatus('loading');
     setPrefillError(null);
+    setPrefillInfo('Consultando Alegra (forzando datos frescos)…');
     try {
-      const data = await api.getAlegraPrefill(sede, fecha);
+      // force=true -> bypassa la cache, trae datos frescos al primer click
+      const data = await api.getAlegraPrefill(sede, fecha, { force: true });
       if (data.saldo_anterior_sugerido > 0 && saldoAnterior === 0) {
         setSaldoAnterior(data.saldo_anterior_sugerido);
       }

@@ -52,13 +52,13 @@ export const api = {
   getAlegraSummary: (sede: string, date: string) =>
     jsonFetch<AlegraSummary>(`/api/alegra/daily-summary?sede=${encodeURIComponent(sede)}&date=${date}`),
 
-  getAlegraPrefill: (sede: string, date: string) =>
+  getAlegraPrefill: (sede: string, date: string, opts?: { force?: boolean }) =>
     jsonFetch<{
       saldo_anterior_sugerido: number;
       entradas: Record<string, number>;
       gastos: Array<{ fecha: string; cp_no: string; tercero: string; concepto: string; valor: number; alegra_payment_id: string }>;
       raw: AlegraSummary & { aperturaDeTurno?: number; ventaFacturaPos?: number; otrosIngresos?: number; posBankId?: string; posBankName?: string };
-    }>(`/api/alegra/prefill?sede=${encodeURIComponent(sede)}&date=${date}`),
+    }>(`/api/alegra/prefill?sede=${encodeURIComponent(sede)}&date=${date}${opts?.force ? '&force=true' : ''}`),
 
   getReconciliation: (sede: string, date: string) =>
     jsonFetch<ReconciliationResponse>(`/api/reconciliation?sede=${encodeURIComponent(sede)}&date=${date}`),

@@ -3,10 +3,10 @@ import { alegraCredentialsForSede } from '../config.js';
 
 const BASE_URL = 'https://api.alegra.com/api/v1';
 const REQUEST_TIMEOUT = 90_000;        // Alegra puede tardar 15-20s por pagina
-const STALE_AFTER_MS = 60 * 1000;      // 60s: tras esto la cache se considera "stale" y se refresca en background
+const STALE_AFTER_MS = 30 * 1000;      // 30s: tras esto la cache se considera "stale" y se refresca en background
 const HARD_CACHE_MS  = 30 * 60 * 1000; // 30min: tope absoluto (entrada muy vieja se reemplaza sincronicamente)
 const RECENT_KEY_TTL_MS = 60 * 60 * 1000; // 1h: el prefetcher solo refresca keys usadas en la ultima hora
-const PREFETCH_INTERVAL_MS = 30 * 1000;   // cada 30s revisamos que refrescar
+const PREFETCH_INTERVAL_MS = 20 * 1000;   // cada 20s revisamos que refrescar
 
 // cache[key] = { fetchedAt: number, data: any, refreshing: boolean }
 const cache = new Map();
@@ -122,42 +122,45 @@ function classifyAccount(bankAccount) {
 
 // Stale-while-revalidate: si hay cache, retorna instantaneo. Si esta stale, dispara
 // un refresh en background (no bloquea). Si no hay cache, fetch sincrono.
-async function fetchWithCache(cacheKey, fetcher) {
+// Con force=true, bypassa la cache: fetch sincrono SIEMPRE (para el boton manual de refrescar).
+async function fetchWithCache(cacheKey, fetcher, { force = false } = {}) {
   recentKeys.set(cacheKey, { lastAccess: Date.now(), fetcher });
-  const hit = cache.get(cacheKey);
-  const now = Date.now();
-  if (hit) {
-    const age = now - hit.fetchedAt;
-    if (age < STALE_AFTER_MS) return hit.data; // fresco
-    if (age < HARD_CACHE_MS) {
-      // stale - retorna cached y refresca atras
-      if (!hit.refreshing) {
-        hit.refreshing = true;
-        fetcher().then((data) => {
-          cache.set(cacheKey, { fetchedAt: Date.now(), data, refreshing: false });
-        }).catch(() => { hit.refreshing = false; });
+  if (!force) {
+    const hit = cache.get(cacheKey);
+    const now = Date.now();
+    if (hit) {
+      const age = now - hit.fetchedAt;
+      if (age < STALE_AFTER_MS) return hit.data; // fresco
+      if (age < HARD_CACHE_MS) {
+        // stale - retorna cached y refresca atras
+        if (!hit.refreshing) {
+          hit.refreshing = true;
+          fetcher().then((data) => {
+            cache.set(cacheKey, { fetchedAt: Date.now(), data, refreshing: false });
+          }).catch(() => { hit.refreshing = false; });
+        }
+        return hit.data;
       }
-      return hit.data;
     }
   }
-  // No cache (o demasiado vieja) - fetch sincrono
+  // No cache, demasiado vieja, o force=true - fetch sincrono
   const data = await fetcher();
   cache.set(cacheKey, { fetchedAt: Date.now(), data, refreshing: false });
   return data;
 }
 
-async function fetchPayments({ sede, date, type }) {
+async function fetchPayments({ sede, date, type, force }) {
   return fetchWithCache(`pay|${sede}|${date}|${type}`, async () => {
     const c = clientFor(sede);
     return paginate(c, '/payments', { date, type });
-  });
+  }, { force });
 }
 
-async function fetchInvoices({ sede, date }) {
+async function fetchInvoices({ sede, date, force }) {
   return fetchWithCache(`inv|${sede}|${date}`, async () => {
     const c = clientFor(sede);
     return paginate(c, '/invoices', { date });
-  });
+  }, { force });
 }
 
 // Loop que refresca en background las entradas accedidas recientemente.
@@ -217,10 +220,10 @@ function paymentToGasto(p) {
   };
 }
 
-export async function dailySummary({ date, sede }) {
+export async function dailySummary({ date, sede, force = false }) {
   const [ins, outs] = await Promise.all([
-    fetchPayments({ sede, date, type: 'in' }),
-    fetchPayments({ sede, date, type: 'out' }),
+    fetchPayments({ sede, date, type: 'in', force }),
+    fetchPayments({ sede, date, type: 'out', force }),
   ]);
 
   // Identificamos la cuenta del POS de la sede a partir de la apertura de turno.
@@ -290,8 +293,9 @@ export async function dailySummary({ date, sede }) {
 
 // Sugerencia automatica de valores para el formulario, a partir de Alegra.
 // Si no hay datos del dia (ni apertura ni pagos en el banco POS), todo queda en 0.
-export async function prefillFromAlegra({ date, sede }) {
-  const s = await dailySummary({ date, sede });
+// force=true: bypassa cache (para el boton manual "Refrescar desde Alegra").
+export async function prefillFromAlegra({ date, sede, force = false }) {
+  const s = await dailySummary({ date, sede, force });
   return {
     saldo_anterior_sugerido: s.aperturaDeTurno,
     entradas: {
