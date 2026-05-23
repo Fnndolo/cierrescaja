@@ -4,7 +4,7 @@ import cors from 'cors';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { runMigrations, waitForDb, pool, startPoolKeepAlive } from './db.js';
+import { runMigrations, initDb, pool, startPoolKeepAlive } from './db.js';
 import { SEDES } from './config.js';
 import { startAlegraPrefetcher, warmupTodayForSedes } from './services/alegraClient.js';
 import closingsRouter from './routes/closings.js';
@@ -54,7 +54,7 @@ app.use((err, _req, res, _next) => {
 async function start() {
   try {
     if (process.env.DATABASE_URL) {
-      await waitForDb();              // reintenta hasta que la DB responda
+      await initDb();                 // conecta probando SSL on/off, con reintentos
       await runMigrations();
       console.log('[db] migraciones aplicadas');
       startPoolKeepAlive();
@@ -71,7 +71,9 @@ async function start() {
     // Apagado limpio ante SIGTERM (redeploys de Railway) / SIGINT (Ctrl+C local).
     const shutdown = (signal) => {
       console.log(`[backend] recibido ${signal}, cerrando...`);
-      server.close(() => { pool.end().finally(() => process.exit(0)); });
+      server.close(() => {
+        Promise.resolve(pool?.end?.()).finally(() => process.exit(0));
+      });
       setTimeout(() => process.exit(0), 10_000).unref?.();
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
