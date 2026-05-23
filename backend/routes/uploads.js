@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { query } from '../db.js';
 import { ensureClosingFolder, uploadFile, deleteFile } from '../services/googleDrive.js';
+import { emitClosingChange } from '../services/eventBus.js';
 
 const router = express.Router();
 
@@ -51,6 +52,7 @@ router.post('/closings/:id/closing-photo', upload.single('photo'), async (req, r
       `UPDATE closings SET drive_closing_photo_id = $1, drive_folder_id = COALESCE(drive_folder_id, $2), updated_at = NOW() WHERE id = $3`,
       [uploaded.id, folderId, req.params.id]
     );
+    emitClosingChange(req.params.id, 'closing-photo');
     res.json({ ok: true, file: uploaded, folderId });
   } catch (err) { next(err); }
 });
@@ -94,6 +96,7 @@ router.post('/closings/:id/comprobantes', upload.array('photos', 30), async (req
       `UPDATE closings SET photos = $1, drive_folder_id = COALESCE(drive_folder_id, $2), updated_at = NOW() WHERE id = $3`,
       [JSON.stringify(newPhotos), folderId, req.params.id]
     );
+    emitClosingChange(req.params.id, 'comprobantes-upload');
     res.json({ ok: true, added: uploadedItems, photos: newPhotos });
   } catch (err) { next(err); }
 });
@@ -111,6 +114,7 @@ router.delete('/closings/:id/comprobantes/:driveFileId', async (req, res, next) 
 
     try { await deleteFile(fileId); } catch (e) { /* ya no existe en Drive, seguir */ }
     await query(`UPDATE closings SET photos = $1, updated_at = NOW() WHERE id = $2`, [JSON.stringify(next), req.params.id]);
+    emitClosingChange(req.params.id, 'comprobantes-delete');
     res.json({ ok: true, photos: next });
   } catch (err) { next(err); }
 });

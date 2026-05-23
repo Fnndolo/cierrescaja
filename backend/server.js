@@ -13,6 +13,7 @@ import comprobantesRouter from './routes/comprobantes.js';
 import reconciliationRouter from './routes/reconciliation.js';
 import uploadsRouter from './routes/uploads.js';
 import photosRouter from './routes/photos.js';
+import eventsRouter from './routes/events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -34,6 +35,7 @@ app.use('/api/comprobantes', comprobantesRouter);
 app.use('/api/reconciliation', reconciliationRouter);
 app.use('/api/uploads', uploadsRouter);
 app.use('/api/photos', photosRouter);
+app.use('/api/events', eventsRouter);
 
 const frontendDist = path.join(__dirname, '..', 'frontend', 'dist');
 const indexHtml = path.join(frontendDist, 'index.html');

@@ -60,6 +60,40 @@ export default function ClosingForm({ sede, fecha, onBack }: Props) {
     };
   }, [closing?.id, sede, fecha]);
 
+  // Sync en tiempo real entre dispositivos: SSE escucha cambios del cierre y refetch.
+  // Asi cuando subes una foto desde el cel, en el compu aparece sin recargar (y viceversa).
+  useEffect(() => {
+    if (!closing) return;
+    let cancelled = false;
+    const es = new EventSource(`/api/events?closingId=${closing.id}`);
+
+    const refetchAndApply = async () => {
+      if (cancelled) return;
+      try {
+        const fresh = await api.getClosingBySedeFecha(sede, fecha) as any;
+        if (cancelled || !fresh) return;
+        // Photos: reemplaza siempre (sin perdida — la fuente es el server)
+        setPhotos(fresh.photos || []);
+        // Gastos: merge aditivo (preserva ediciones en curso en este cliente)
+        setGastos((prev) => syncGastosSilent(prev, fresh.gastos || []));
+        // Si el otro dispositivo finalizo, refrescamos closing completo para reflejar estado
+        if (fresh.estado !== closing.estado) {
+          setClosing(fresh as ClosingWithSugg);
+        }
+      } catch (e) { /* silencioso */ }
+    };
+
+    es.addEventListener('change', refetchAndApply);
+    es.addEventListener('hello', () => { /* conectado, ok */ });
+    es.onerror = () => { /* EventSource reconecta solo */ };
+
+    return () => {
+      cancelled = true;
+      es.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closing?.id]);
+
   // estado local editable
   const [hora, setHora] = useState<string>('');
   const [responsable, setResponsable] = useState<string>('');

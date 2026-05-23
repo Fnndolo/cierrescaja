@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { SEDES } from '../config.js';
 import { ensureClosingFolder, uploadFile } from '../services/googleDrive.js';
 import { fillArqueo } from '../services/excelFiller.js';
+import { emitClosingChange } from '../services/eventBus.js';
 
 const router = express.Router();
 
@@ -144,6 +145,7 @@ router.patch('/:id', async (req, res, next) => {
     const sql = `UPDATE closings SET ${fields.join(', ')} WHERE id = $${params.length} AND estado = 'borrador' RETURNING *`;
     const r = await query(sql, params);
     if (!r.rows[0]) return res.status(400).json({ error: 'cierre finalizado o inexistente' });
+    emitClosingChange(req.params.id, 'patch');
     res.json(r.rows[0]);
   } catch (err) { next(err); }
 });
@@ -187,6 +189,7 @@ router.post('/:id/finalize', async (req, res, next) => {
        WHERE id = $3 RETURNING *`,
       [folderId, uploaded.id, req.params.id]
     );
+    emitClosingChange(req.params.id, 'finalize');
     res.json({
       closing: upd.rows[0],
       drive: { folderId, excel: uploaded },
@@ -203,6 +206,7 @@ router.post('/:id/reopen', async (req, res, next) => {
       [req.params.id]
     );
     if (!r.rows[0]) return res.status(404).json({ error: 'no encontrado' });
+    emitClosingChange(req.params.id, 'reopen');
     res.json(r.rows[0]);
   } catch (err) { next(err); }
 });
