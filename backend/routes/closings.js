@@ -121,15 +121,22 @@ router.get('/by/:sede/:fecha', async (req, res, next) => {
 
 // PATCH /api/closings/:id  body: campos a actualizar
 const ALLOWED_FIELDS = ['hora', 'responsable', 'saldo_anterior', 'entradas', 'gastos', 'conteo'];
+const JSON_FIELDS = new Set(['entradas', 'gastos', 'conteo']);
 router.patch('/:id', async (req, res, next) => {
   try {
     const fields = [];
     const params = [];
     for (const k of ALLOWED_FIELDS) {
-      if (req.body[k] !== undefined) {
-        params.push(['entradas', 'gastos', 'conteo'].includes(k) ? JSON.stringify(req.body[k]) : req.body[k]);
-        fields.push(`${k} = $${params.length}`);
+      if (req.body[k] === undefined) continue;
+      let val = req.body[k];
+      if (JSON_FIELDS.has(k)) {
+        val = JSON.stringify(val);
+      } else if (val === '' || val === undefined) {
+        // Postgres rechaza string vacio en columnas TIME / NUMERIC. Convertir a NULL.
+        val = null;
       }
+      params.push(val);
+      fields.push(`${k} = $${params.length}`);
     }
     if (!fields.length) return res.status(400).json({ error: 'sin campos' });
     fields.push(`updated_at = NOW()`);
