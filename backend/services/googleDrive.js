@@ -1,9 +1,16 @@
 import { Readable } from 'node:stream';
 import { getDrive } from './googleAuth.js';
-import { driveFolderForSede, resolveClosingPath } from '../config.js';
+import {
+  driveFolderForSede,
+  driveConfigForSede,
+  applyPattern,
+  partsFromDate,
+  MESES_ES,
+} from '../config.js';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const folderCache = new Map(); // key: parentId/name  -> folderId
+const monthFolderCache = new Map(); // key: parentId|sede|YYYY-MM -> folderId
 
 function bufferToStream(buffer) {
   return Readable.from(buffer);
@@ -60,8 +67,52 @@ export async function ensureFolderPathFrom(parentId, parts) {
   return currentId;
 }
 
+// Busca la carpeta del mes haciendo "fuzzy match": si ya existe alguna carpeta cuyo nombre
+// contiene el nombre del mes (ej. "CIERRES MAYO", "CIERRES MAYO 2026", "MAYO", "MAYO 2025"),
+// la reutilizamos. Si no encuentra nada, crea con el nombre canonico del patron.
+// Prioridad: 1) match exacto canonical  2) contiene MES y el año actual  3) contiene MES sin año  4) primera con MES
+async function ensureMonthFolder(parentId, sede, date) {
+  const cfg = driveConfigForSede(sede);
+  const { y, m } = partsFromDate(date);
+  const mesUpper = MESES_ES[m - 1];
+  const canonical = applyPattern(cfg.monthPattern, date);
+  const cacheKey = `${parentId}|${cfg.key}|${y}-${String(m).padStart(2, '0')}`;
+
+  if (monthFolderCache.has(cacheKey)) return monthFolderCache.get(cacheKey);
+
+  const drive = getDrive();
+  const res = await drive.files.list({
+    q: `'${parentId}' in parents and mimeType = '${FOLDER_MIME}' and trashed = false`,
+    fields: 'files(id, name)',
+    pageSize: 200,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+  const folders = res.data.files || [];
+  const norm = (s) => String(s || '').toUpperCase();
+
+  // 1) Match exacto con el patron canonical
+  let chosen = folders.find((f) => f.name === canonical);
+  // 2) Match: nombre contiene MES y el año actual
+  if (!chosen) chosen = folders.find((f) => norm(f.name).includes(mesUpper) && f.name.includes(String(y)));
+  // 3) Match: nombre contiene MES y NO contiene ningun año de 4 digitos (formato corto tipo "CIERRES MAYO")
+  if (!chosen) chosen = folders.find((f) => norm(f.name).includes(mesUpper) && !/\b\d{4}\b/.test(f.name));
+  // 4) Primera con MES (fallback)
+  if (!chosen) chosen = folders.find((f) => norm(f.name).includes(mesUpper));
+
+  if (!chosen) {
+    chosen = await createFolder(drive, parentId, canonical);
+    console.log(`[drive] carpeta mes creada: "${canonical}" en ${parentId}`);
+  } else {
+    console.log(`[drive] carpeta mes reusada: "${chosen.name}" (canonical era "${canonical}")`);
+  }
+  monthFolderCache.set(cacheKey, chosen.id);
+  return chosen.id;
+}
+
 // Asegura la ruta hasta la carpeta donde se guardan los archivos del cierre de un dia.
 // La ruta exacta depende de la sede (ver SEDE_DRIVE_DEFAULTS en config.js).
+// La carpeta del mes se reusa si ya existe con cualquier variante razonable del nombre.
 // kind: 'cierre' = arqueo + foto del cierre
 //       'gastos' = fotos de comprobantes de gasto
 //       'day'    = carpeta del dia sin subcarpeta interna
@@ -70,8 +121,21 @@ export async function ensureClosingFolder({ sede, date, kind = 'cierre' }) {
   if (!sedeRoot) {
     throw new Error(`No hay DRIVE_FOLDER_<SEDE> configurado para: ${sede}`);
   }
-  const parts = resolveClosingPath({ sede, date, kind });
-  return ensureFolderPathFrom(sedeRoot, parts);
+  const cfg = driveConfigForSede(sede);
+
+  // 1) Padre intermedio (ej. "CIERRE CAJA" para ARMENIA) — match exacto
+  let parent = sedeRoot;
+  if (cfg.parent) parent = await ensureFolderPathFrom(parent, [cfg.parent]);
+
+  // 2) Carpeta del mes — fuzzy match (reusa la existente si ya hay alguna del mes)
+  parent = await ensureMonthFolder(parent, sede, date);
+
+  // 3) Carpeta del dia + subcarpeta opcional segun kind — match exacto
+  const tail = [applyPattern(cfg.dayPattern, date)];
+  if (kind === 'cierre' && cfg.cierreSubfolder) tail.push(cfg.cierreSubfolder);
+  else if (kind === 'gastos' && cfg.gastosSubfolder) tail.push(cfg.gastosSubfolder);
+
+  return ensureFolderPathFrom(parent, tail);
 }
 
 export async function uploadFile({ folderId, name, mimeType, buffer }) {

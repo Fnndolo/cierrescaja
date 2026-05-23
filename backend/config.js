@@ -57,10 +57,11 @@ const UNIFORM_DAY   = 'CIERRE {DD}-{MM}-{YYYY}';
 const UNIFORM_GASTOS = 'COMPROBANTES';
 
 const SEDE_DRIVE_DEFAULTS = {
-  PASTO:    { parent: '',                monthPattern: UNIFORM_MONTH, dayPattern: UNIFORM_DAY, cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
-  MEDELLIN: { parent: '',                monthPattern: UNIFORM_MONTH, dayPattern: UNIFORM_DAY, cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
-  ARMENIA:  { parent: 'CIERRE CAJA',     monthPattern: UNIFORM_MONTH, dayPattern: UNIFORM_DAY, cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
-  PEREIRA:  { parent: 'CIERRE DE CAJA',  monthPattern: UNIFORM_MONTH, dayPattern: UNIFORM_DAY, cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
+  // PASTO usa formato corto "DD-MM" para el dia (igual que sus carpetas existentes 01-05, 04-05...)
+  PASTO:    { parent: '',                monthPattern: UNIFORM_MONTH, dayPattern: '{DD}-{MM}', cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
+  MEDELLIN: { parent: '',                monthPattern: UNIFORM_MONTH, dayPattern: UNIFORM_DAY,  cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
+  ARMENIA:  { parent: 'CIERRE CAJA',     monthPattern: UNIFORM_MONTH, dayPattern: UNIFORM_DAY,  cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
+  PEREIRA:  { parent: 'CIERRE DE CAJA',  monthPattern: UNIFORM_MONTH, dayPattern: UNIFORM_DAY,  cierreSubfolder: '', gastosSubfolder: UNIFORM_GASTOS },
 };
 
 function envOr(name, fallback) {
@@ -82,9 +83,9 @@ export function driveConfigForSede(sede) {
   };
 }
 
-const MESES_ES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+export const MESES_ES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO', 'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
 
-function partsFromDate(dateInput) {
+export function partsFromDate(dateInput) {
   let y, m, d;
   if (typeof dateInput === 'string') {
     const match = dateInput.match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -96,7 +97,7 @@ function partsFromDate(dateInput) {
   return { y, m, d };
 }
 
-function applyPattern(pattern, dateInput) {
+export function applyPattern(pattern, dateInput) {
   if (!pattern) return '';
   const { y, m, d } = partsFromDate(dateInput);
   const mesUpper = MESES_ES[m - 1];
