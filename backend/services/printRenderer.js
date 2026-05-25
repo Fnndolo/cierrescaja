@@ -154,27 +154,28 @@ function transaccionesSection(closing, transacciones) {
   </section>`;
 }
 
-function cierrePhotoSection(closing) {
-  if (!closing.drive_closing_photo_id) {
+// Acepta un array de URLs/data-URLs de imagenes. Para PDF se pasan varias paginas;
+// para imagen, una sola URL al proxy. Si esta vacio, muestra un placeholder.
+function cierrePhotoSection(closing, photoSrcs) {
+  if (!photoSrcs || photoSrcs.length === 0) {
     return `
     <section class="page cierre">
       <h1>CIERRE DEL TURNO - ${escapeHtml(closing.sede)}</h1>
-      <p class="c">(No se subio foto del cierre del turno)</p>
+      <p class="c">(No se subio foto / archivo del cierre del turno)</p>
     </section>`;
   }
-  // Usamos el proxy /api/photos que ya tenemos para mostrar la imagen (o PDF)
-  const url = `/api/photos/${encodeURIComponent(closing.drive_closing_photo_id)}`;
-  return `
-  <section class="page cierre">
-    <h1>CIERRE DEL TURNO - ${escapeHtml(closing.sede)}</h1>
-    <p class="sub">${fechaToString(closing.fecha)}</p>
-    <div class="cierre-media">
-      <img src="${url}" alt="Cierre del turno" onerror="this.onerror=null; this.outerHTML='<iframe src=&quot;${url}&quot; class=&quot;pdf&quot;></iframe>'" />
-    </div>
-  </section>`;
+  // Una pagina por imagen (un PDF de N paginas -> N paginas en la impresion)
+  return photoSrcs.map((src, i) => `
+    <section class="page cierre">
+      <h1>CIERRE DEL TURNO - ${escapeHtml(closing.sede)}${photoSrcs.length > 1 ? ` (${i + 1}/${photoSrcs.length})` : ''}</h1>
+      <p class="sub">${fechaToString(closing.fecha)}</p>
+      <div class="cierre-media">
+        <img src="${src}" alt="Cierre del turno" />
+      </div>
+    </section>`).join('');
 }
 
-export function renderPrintPage({ closing, transacciones }) {
+export function renderPrintPage({ closing, transacciones, photoSrcs }) {
   const styles = `
     * { box-sizing: border-box; }
     @page { size: letter; margin: 8mm; }
@@ -216,7 +217,7 @@ export function renderPrintPage({ closing, transacciones }) {
       <button onclick="window.print()">🖨 Imprimir</button>
       <button onclick="window.close()">Cerrar</button>
     </div>
-    ${cierrePhotoSection(closing)}
+    ${cierrePhotoSection(closing, photoSrcs)}
     ${arqueoSection(closing)}
     ${transaccionesSection(closing, transacciones)}
   `;
@@ -231,17 +232,22 @@ export function renderPrintPage({ closing, transacciones }) {
 <body>
   ${body}
   <script>
-    // Esperamos a que la imagen del cierre cargue (si hay) y disparamos print solo
+    // Espera a que TODAS las imagenes del cierre carguen antes de disparar print
     function fireAuto() {
-      // Pequeño delay para que las tablas y la imagen renderee bien
-      setTimeout(() => { try { window.print(); } catch(e) {} }, 800);
+      setTimeout(() => { try { window.print(); } catch(e) {} }, 500);
     }
-    const img = document.querySelector('.cierre-media img');
-    if (img && !img.complete) {
-      img.addEventListener('load', fireAuto, { once: true });
-      img.addEventListener('error', fireAuto, { once: true });
-    } else {
+    const imgs = Array.from(document.querySelectorAll('.cierre-media img'));
+    if (imgs.length === 0) {
       fireAuto();
+    } else {
+      let pending = imgs.length;
+      const done = () => { if (--pending <= 0) fireAuto(); };
+      imgs.forEach((img) => {
+        if (img.complete) done();
+        else { img.addEventListener('load', done, { once: true }); img.addEventListener('error', done, { once: true }); }
+      });
+      // Failsafe: si algo se cuelga, imprime a los 8s igual
+      setTimeout(() => { try { window.print(); } catch(e) {} }, 8000);
     }
   </script>
 </body>

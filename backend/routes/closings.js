@@ -1,11 +1,12 @@
 import express from 'express';
 import { query } from '../db.js';
 import { SEDES } from '../config.js';
-import { ensureClosingFolder, uploadFile } from '../services/googleDrive.js';
+import { ensureClosingFolder, uploadFile, getFileBytes } from '../services/googleDrive.js';
 import { fillArqueo } from '../services/excelFiller.js';
 import { buildTransactionsReport } from '../services/transactionsReport.js';
 import { getEgresosDelDia } from '../services/alegraClient.js';
 import { renderPrintPage } from '../services/printRenderer.js';
+import { pdfToPngDataUrls } from '../services/pdfToImages.js';
 import { emitClosingChange } from '../services/eventBus.js';
 
 const router = express.Router();
@@ -245,6 +246,7 @@ router.get('/:id/print', async (req, res, next) => {
       ? closing.fecha.toISOString().slice(0, 10)
       : String(closing.fecha).slice(0, 10);
 
+    // Transacciones desde Alegra (cacheadas)
     let transacciones = [];
     try {
       const outs = await getEgresosDelDia({ sede: closing.sede, date: fechaStr });
@@ -256,7 +258,26 @@ router.get('/:id/print', async (req, res, next) => {
       console.warn('[print] no pude traer transacciones:', e.message);
     }
 
-    const html = renderPrintPage({ closing, transacciones });
+    // Foto/archivo del cierre del turno: si es PDF lo convertimos a imagenes (una por
+    // pagina) para que el navegador pueda imprimirlo. Si es imagen, usamos el proxy.
+    let photoSrcs = [];
+    if (closing.drive_closing_photo_id) {
+      try {
+        const file = await getFileBytes(closing.drive_closing_photo_id);
+        if (file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.name)) {
+          photoSrcs = await pdfToPngDataUrls(file.buffer, { cacheKey: closing.drive_closing_photo_id });
+        } else if (file.mimeType.startsWith('image/')) {
+          photoSrcs = [`/api/photos/${closing.drive_closing_photo_id}`];
+        } else {
+          console.warn('[print] tipo no soportado:', file.mimeType);
+        }
+      } catch (e) {
+        console.warn('[print] no pude traer/convertir el archivo del cierre:', e.message);
+        photoSrcs = [`/api/photos/${closing.drive_closing_photo_id}`]; // fallback
+      }
+    }
+
+    const html = renderPrintPage({ closing, transacciones, photoSrcs });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
   } catch (err) { next(err); }

@@ -201,3 +201,23 @@ export async function getFileInfo(fileId) {
   });
   return res.data;
 }
+
+// Descarga el contenido binario de un archivo de Drive en memoria.
+// Devuelve { mimeType, name, buffer }.
+export async function getFileBytes(fileId) {
+  const drive = getDrive();
+  const meta = await drive.files.get({
+    fileId,
+    fields: 'id, name, mimeType',
+    supportsAllDrives: true,
+  });
+  const res = await drive.files.get(
+    { fileId, alt: 'media', supportsAllDrives: true },
+    { responseType: 'arraybuffer' }
+  );
+  return {
+    mimeType: meta.data.mimeType || 'application/octet-stream',
+    name: meta.data.name || '',
+    buffer: Buffer.from(res.data),
+  };
+}
