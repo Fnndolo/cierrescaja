@@ -435,13 +435,19 @@ export default function ClosingForm({ sede, fecha, onBack }: Props) {
                 onClick={reopen}
                 className="flex-1 rounded border border-slate-300 py-3 text-sm font-semibold text-slate-700"
               >Reabrir</button>
+              <button
+                type="button"
+                onClick={() => window.open(`/api/closings/${closing.id}/print`, '_blank', 'noopener')}
+                className="flex-1 rounded bg-brand py-3 text-sm font-semibold text-white"
+                title="Abre una vista de impresion con la foto del cierre, el arqueo y las transacciones"
+              >🖨 Imprimir todo</button>
               {(driveLinks?.excel?.webViewLink || closing.drive_excel_id) && (
                 <a
                   href={driveLinks?.excel?.webViewLink || `https://drive.google.com/file/d/${closing.drive_excel_id}/view`}
                   target="_blank"
                   rel="noreferrer"
                   className="flex-1 rounded bg-emerald-600 py-3 text-center text-sm font-semibold text-white"
-                >Ver Excel en Drive</a>
+                >Ver Excel</a>
               )}
             </>
           )}

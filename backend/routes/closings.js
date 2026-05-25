@@ -4,6 +4,8 @@ import { SEDES } from '../config.js';
 import { ensureClosingFolder, uploadFile } from '../services/googleDrive.js';
 import { fillArqueo } from '../services/excelFiller.js';
 import { buildTransactionsReport } from '../services/transactionsReport.js';
+import { getEgresosDelDia } from '../services/alegraClient.js';
+import { renderPrintPage } from '../services/printRenderer.js';
 import { emitClosingChange } from '../services/eventBus.js';
 
 const router = express.Router();
@@ -227,6 +229,36 @@ router.post('/:id/reopen', async (req, res, next) => {
     if (!r.rows[0]) return res.status(404).json({ error: 'no encontrado' });
     emitClosingChange(req.params.id, 'reopen');
     res.json(r.rows[0]);
+  } catch (err) { next(err); }
+});
+
+// GET /api/closings/:id/print
+// Devuelve una pagina HTML auto-imprimible con: foto del cierre + arqueo + transacciones.
+// El navegador la abre, dispara window.print() solo y el usuario imprime todo de una vez.
+router.get('/:id/print', async (req, res, next) => {
+  try {
+    const r = await query('SELECT * FROM closings WHERE id = $1', [req.params.id]);
+    const closing = r.rows[0];
+    if (!closing) return res.status(404).send('Cierre no encontrado');
+
+    const fechaStr = closing.fecha?.toISOString
+      ? closing.fecha.toISOString().slice(0, 10)
+      : String(closing.fecha).slice(0, 10);
+
+    let transacciones = [];
+    try {
+      const outs = await getEgresosDelDia({ sede: closing.sede, date: fechaStr });
+      transacciones = (outs || []).filter((p) => {
+        const t = String(p.anotation || p.observations || '');
+        return !/apertura\s*de\s*turno/i.test(t) && !/cierre\s*de\s*turno/i.test(t);
+      }).sort((a, b) => (Number(b.number) || 0) - (Number(a.number) || 0));
+    } catch (e) {
+      console.warn('[print] no pude traer transacciones:', e.message);
+    }
+
+    const html = renderPrintPage({ closing, transacciones });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
   } catch (err) { next(err); }
 });
 
